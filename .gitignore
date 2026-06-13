@@ -1,0 +1,26 @@
+# Bỏ qua thư mục tham chiếu mã nguồn của PX4 (chứa rất nhiều file nặng)
+references/
+
+# Bỏ qua các thư mục và file build của STM32CubeIDE
+firmware/testspih743/Debug/
+firmware/testspih743/Release/
+firmware/testspih743/.mxproject
+.metadata/
+
+# File nhị phân sinh ra trong quá trình build
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.su
+
+# Bỏ qua cấu hình IDE cá nhân
+.vscode/
+.idea/
+*.launch
+
+# Rác của hệ điều hành
+.DS_Store
+Thumbs.db

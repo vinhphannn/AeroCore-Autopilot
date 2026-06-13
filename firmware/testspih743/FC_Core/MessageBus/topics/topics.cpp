@@ -1,0 +1,34 @@
+#include "sensor_imu.h"
+#include "sensor_baro.h"
+#include "sensor_mag.h"
+#include "sensor_optical_flow.h"
+#include "distance_sensor.h"
+#include "sensor_gps.h"
+#include "vehicle_attitude.h"
+#include "vehicle_status.h"
+#include "actuator_armed.h"
+#include "mavlink_log.h"
+#include "vehicle_imu.h"
+#include "manual_control_setpoint.h"
+#include "vehicle_torque_setpoint.h"
+#include "vehicle_thrust_setpoint.h"
+#include "vehicle_attitude_setpoint.h"
+#include "input_rc.h"
+// Khởi tạo vùng nhớ thực sự cho Topic.
+// Chỉ được định nghĩa đúng 1 lần duy nhất trong toàn bộ project.
+uORB::Topic<sensor_imu_s> orb_sensor_imu;
+uORB::Topic<sensor_baro_s> orb_sensor_baro;
+uORB::Topic<sensor_mag_s> orb_sensor_mag;
+uORB::Topic<sensor_optical_flow_s> orb_sensor_optical_flow;
+uORB::Topic<distance_sensor_s> orb_distance_sensor;
+uORB::Topic<sensor_gps_s> orb_sensor_gps;
+uORB::Topic<vehicle_attitude_s> orb_vehicle_attitude;
+uORB::Topic<mavlink_log_s> orb_mavlink_log;
+uORB::Topic<vehicle_imu_s> orb_vehicle_imu;
+uORB::Topic<vehicle_status_s> orb_vehicle_status;
+uORB::Topic<actuator_armed_s> orb_actuator_armed;
+uORB::Topic<manual_control_setpoint_s> orb_manual_control_setpoint;
+uORB::Topic<vehicle_torque_setpoint_s> orb_vehicle_torque_setpoint;
+uORB::Topic<vehicle_thrust_setpoint_s> orb_vehicle_thrust_setpoint;
+uORB::Topic<vehicle_attitude_setpoint_s> orb_vehicle_attitude_setpoint;
+uORB::Topic<input_rc_s> orb_input_rc;
