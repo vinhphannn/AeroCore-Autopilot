@@ -38,6 +38,8 @@ jobs:
       - name: Build Firmware
         run: |
           cd firmware/testspih743/Debug
+          # Loại bỏ cờ -fcyclomatic-complexity vì gcc-arm-none-eabi trên Ubuntu không hỗ trợ
+          find . -name "*.mk" -exec sed -i 's/-fcyclomatic-complexity//g' {} +
           make clean
           make -j$(nproc) all
           # Sinh file .bin từ .elf để dễ nạp hơn nếu dùng CubeProgrammer
