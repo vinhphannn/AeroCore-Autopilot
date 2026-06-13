@@ -22,8 +22,6 @@ jobs:
     - name: Build Firmware (Make)
       run: |
         cd firmware/testspih743/Debug
-        # Cập nhật đường dẫn tuyệt đối của Linker Script thành đường dẫn tương đối
-        sed -i 's|/[^ ]*STM32H743VITX_FLASH.ld|../STM32H743VITX_FLASH.ld|g' makefile
         # Loại bỏ cờ -fcyclomatic-complexity vì gcc-arm-none-eabi trên Ubuntu không hỗ trợ
         find . -name "*.mk" -exec sed -i 's/-fcyclomatic-complexity//g' {} +
         make clean
