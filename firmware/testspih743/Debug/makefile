@@ -114,17 +114,17 @@ all: main-build
 main-build: MyFC_H743.elf secondary-outputs
 
 # Tool invocations
-MyFC_H743.elf MyFC_H743.map: $(OBJS) $(USER_OBJS) /home/zynh/Workspace/MyFC/firmware/testspih743/STM32H743VITX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "MyFC_H743.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"/home/zynh/Workspace/MyFC/firmware/testspih743/STM32H743VITX_FLASH.ld" -Wl,-Map="MyFC_H743.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+MyFC_H743.elf MyFC_H743.map: $(OBJS) $(USER_OBJS) ../STM32H743VITX_FLASH.ld makefile $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-g++ -o "MyFC_H743.elf" $(OBJS) $(USER_OBJS) $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"../STM32H743VITX_FLASH.ld" -Wl,-Map="MyFC_H743.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
-default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+default.size.stdout: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-size  $(EXECUTABLES)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-MyFC_H743.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
+MyFC_H743.list: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "MyFC_H743.list"
 	@echo 'Finished building: $@'
 	@echo ' '

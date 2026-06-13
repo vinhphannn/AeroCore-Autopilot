@@ -2,7 +2,6 @@
 references/
 
 # Bỏ qua các thư mục và file build của STM32CubeIDE
-firmware/testspih743/Debug/
 firmware/testspih743/Release/
 firmware/testspih743/.mxproject
 .metadata/
