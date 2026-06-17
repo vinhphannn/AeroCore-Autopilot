@@ -46,6 +46,7 @@ FC_Core/Commander/flight_mode_manager \
 FC_Core/Communication \
 FC_Core/Controllers/control_allocator \
 FC_Core/Controllers/mc_att_control \
+FC_Core/Controllers/mc_pos_control \
 FC_Core/Controllers/mc_rate_control \
 FC_Core/Drivers \
 FC_Core/Drivers/actuator \
@@ -57,6 +58,7 @@ FC_Core/Drivers/optical_flow \
 FC_Core/Drivers/radio \
 FC_Core/Drivers/rangefinder \
 FC_Core/Drivers/rc \
+FC_Core/Estimator \
 FC_Core/Estimator/ahrs \
 FC_Core/Main \
 FC_Core/MessageBus/topics \

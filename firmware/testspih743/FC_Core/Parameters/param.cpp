@@ -45,6 +45,10 @@ static const struct param_info_s px4_parameters[PARAM_COUNT] = {
 
     // MC_AIRMODE: 0=Disabled, 1=Roll/Pitch, 2=Roll/Pitch/Yaw
     {"MC_AIRMODE",   PARAM_TYPE_INT32, {.i = 0}},
+
+    // Navigation & RTL Parameters
+    {"NAV_ACC_RAD",  PARAM_TYPE_FLOAT, {.f = 1.0f}}, // Bán kính chấp nhận waypoint (mét)
+    {"RTL_ALT",      PARAM_TYPE_FLOAT, {.f = 2.0f}}, // Độ cao RTL an toàn (mét)
 };
 
 // MẢNG RAM HOẠT ĐỘNG

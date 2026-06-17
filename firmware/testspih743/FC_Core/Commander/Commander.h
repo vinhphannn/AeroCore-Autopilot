@@ -5,6 +5,10 @@
 #include "../MessageBus/topics/actuator_armed.h"
 #include "../MessageBus/topics/manual_control_setpoint.h"
 #include "../MessageBus/uORB_lite.h"
+#include "../MessageBus/topics/vehicle_local_position.h"
+#include "../MessageBus/topics/vehicle_attitude_setpoint.h"
+#include "../MessageBus/topics/distance_sensor.h"
+#include "../MessageBus/topics/vehicle_command.h"
 #include "../Drivers/rc/crsf.h"
 
 class Commander {
@@ -34,8 +38,16 @@ private:
     uORB::PublicationMulti<vehicle_status_s>   _status_pub;
     uORB::PublicationMulti<actuator_armed_s>   _armed_pub;
     uORB::PublicationMulti<manual_control_setpoint_s> _manual_pub;
+    uORB::SubscriptionMulti<vehicle_local_position_s> _local_pos_sub;
+    uORB::SubscriptionMulti<vehicle_attitude_setpoint_s> _att_sp_sub;
+    uORB::SubscriptionMulti<distance_sensor_s> _dist_sensor_sub;
+    uORB::SubscriptionMulti<vehicle_command_s> _cmd_sub;
 
     uint64_t _last_update_us;
+    uint32_t _land_detect_counter;
+    bool     _takeoff_complete;
+    uint8_t  _last_rc_mode_state;
+    bool     _rc_mode_initialized;
 
     // Cấu hình kênh RC (AETR = Roll, Pitch, Throttle, Yaw)
     static constexpr int RC_CH_ROLL     = 0; // CH1
@@ -43,6 +55,7 @@ private:
     static constexpr int RC_CH_THROTTLE = 2; // CH3
     static constexpr int RC_CH_YAW      = 3; // CH4
     static constexpr int RC_CH_ARM      = 4; // CH5 (Aux1)
+    static constexpr int RC_CH_MODE     = 5; // CH6 (Aux2)
     
     static constexpr uint16_t RC_MIN = 1000;
     static constexpr uint16_t RC_MAX = 2000;

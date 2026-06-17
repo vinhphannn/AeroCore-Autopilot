@@ -1,6 +1,8 @@
 #include "mavlink_main.h"
 #include "usbd_cdc_if.h" // Dùng USB CDC để giao tiếp với QGroundControl
 #include "../Parameters/param.h" // Để đổi PID qua MAVLink
+#include "../Navigation/Navigator.h"
+#include "../Main/fc_logging.h"
 
 // Đặt toàn bộ object MavlinkManager vào vùng SRAM hỗ trợ DMA để an toàn cho USB/UART TX
 __attribute__((section(".dma_buffer"))) __attribute__((aligned(32))) MavlinkManager g_mavlink;
@@ -17,10 +19,13 @@ MavlinkManager::MavlinkManager() :
     _armed_sub(orb_actuator_armed, 0),
     _status_sub(orb_vehicle_status, 0),
     _rc_sub(orb_input_rc, 0),
+    _cmd_pub(orb_vehicle_command),
     _last_heartbeat_us(0),
     _last_imu_send_us(0),
     _rx_head(0), _rx_tail(0),
-    _tx_head(0), _tx_tail(0)
+    _tx_head(0), _tx_tail(0),
+    _incoming_mission_count(0),
+    _incoming_mission_index(0)
 {}
 
 uint64_t MavlinkManager::get_time_us() {
@@ -127,6 +132,15 @@ enum PX4_CUSTOM_MAIN_MODE {
     PX4_CUSTOM_MAIN_MODE_STABILIZED,
 };
 
+enum PX4_CUSTOM_SUB_MODE_AUTO {
+    PX4_CUSTOM_SUB_MODE_AUTO_READY = 1,
+    PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF = 2,
+    PX4_CUSTOM_SUB_MODE_AUTO_LOITER = 3,
+    PX4_CUSTOM_SUB_MODE_AUTO_MISSION = 4,
+    PX4_CUSTOM_SUB_MODE_AUTO_RTL = 5,
+    PX4_CUSTOM_SUB_MODE_AUTO_LAND = 6,
+};
+
 // ================= MAVLINK SENDER =================
 
 void MavlinkManager::send_heartbeat() {
@@ -167,6 +181,22 @@ void MavlinkManager::send_heartbeat() {
             break;
         case NAVIGATION_STATE_ACRO:
             custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_ACRO;
+            break;
+        case NAVIGATION_STATE_AUTO_TAKEOFF:
+            custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
+            custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_TAKEOFF;
+            break;
+        case NAVIGATION_STATE_AUTO_MISSION:
+            custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
+            custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_MISSION;
+            break;
+        case NAVIGATION_STATE_AUTO_RTL:
+            custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
+            custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_RTL;
+            break;
+        case NAVIGATION_STATE_AUTO_LAND:
+            custom_mode.main_mode = PX4_CUSTOM_MAIN_MODE_AUTO;
+            custom_mode.sub_mode = PX4_CUSTOM_SUB_MODE_AUTO_LAND;
             break;
         case NAVIGATION_STATE_STAB:
         default:
@@ -382,16 +412,424 @@ void MavlinkManager::handle_message(mavlink_message_t* msg) {
         case MAVLINK_MSG_ID_PARAM_SET:
             handle_param_set(msg);
             break;
+        case MAVLINK_MSG_ID_MISSION_COUNT:
+            handle_mission_count(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_ITEM_INT:
+            handle_mission_item_int(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_ITEM:
+            handle_mission_item(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_REQUEST_LIST:
+            handle_mission_request_list(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_REQUEST_INT:
+            handle_mission_request_int(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_REQUEST:
+            handle_mission_request(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_CLEAR_ALL:
+            handle_mission_clear_all(msg);
+            break;
+        case MAVLINK_MSG_ID_MISSION_SET_CURRENT:
+            handle_mission_set_current(msg);
+            break;
+        case MAVLINK_MSG_ID_SET_MODE:
+            handle_set_mode(msg);
+            break;
+        case MAVLINK_MSG_ID_COMMAND_LONG:
+            handle_command_long(msg);
+            break;
         default:
             break;
     }
 }
 
 void MavlinkManager::handle_param_request_list(mavlink_message_t* msg) {
-    // TODO Phase 5: Trả lời lại danh sách các thông số bằng MAVLINK_MSG_ID_PARAM_VALUE
+    for (uint16_t i = 0; i < PARAM_COUNT; i++) {
+        mavlink_message_t tx_msg;
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+
+        union param_value_u val;
+        param_get(i, &val);
+
+        float param_val_f = 0.0f;
+        uint8_t mav_type = MAV_PARAM_TYPE_REAL32;
+
+        if (param_type(i) == PARAM_TYPE_INT32) {
+            param_val_f = (float)val.i;
+            mav_type = MAV_PARAM_TYPE_INT32;
+        } else if (param_type(i) == PARAM_TYPE_FLOAT) {
+            param_val_f = val.f;
+            mav_type = MAV_PARAM_TYPE_REAL32;
+        }
+
+        char name_buf[16] = {0};
+        strncpy(name_buf, param_name(i), 16);
+
+        mavlink_msg_param_value_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                     name_buf, param_val_f, mav_type, PARAM_COUNT, i);
+
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+        tx_push(buf, len);
+    }
 }
 
 void MavlinkManager::handle_param_set(mavlink_message_t* msg) {
-    // TODO Phase 5: Cập nhật thông số vào hệ thống bằng lệnh param_set()
+    mavlink_param_set_t set_packet;
+    mavlink_msg_param_set_decode(msg, &set_packet);
+
+    if (set_packet.target_system == MAVLINK_SYSTEM_ID && set_packet.target_component == MAVLINK_COMPONENT_ID) {
+        char param_id[16] = {0};
+        strncpy(param_id, set_packet.param_id, 16);
+
+        param_t param = param_find(param_id);
+        if (param != PARAM_INVALID) {
+            union param_value_u val;
+            if (param_type(param) == PARAM_TYPE_INT32) {
+                val.i = (int32_t)set_packet.param_value;
+                param_set(param, &val.i);
+            } else if (param_type(param) == PARAM_TYPE_FLOAT) {
+                val.f = set_packet.param_value;
+                param_set(param, &val.f);
+            }
+
+            // Gửi lại PARAM_VALUE xác nhận thay đổi thành công cho QGC
+            mavlink_message_t tx_msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+
+            float param_val_f = 0.0f;
+            uint8_t mav_type = MAV_PARAM_TYPE_REAL32;
+            if (param_type(param) == PARAM_TYPE_INT32) {
+                param_val_f = (float)val.i;
+                mav_type = MAV_PARAM_TYPE_INT32;
+            } else if (param_type(param) == PARAM_TYPE_FLOAT) {
+                param_val_f = val.f;
+                mav_type = MAV_PARAM_TYPE_REAL32;
+            }
+
+            mavlink_msg_param_value_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                         param_id, param_val_f, mav_type, PARAM_COUNT, param);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+            tx_push(buf, len);
+
+            // Lưu trực tiếp xuống bộ nhớ Flash
+            param_save_default();
+        }
+    }
+}
+
+void MavlinkManager::handle_set_mode(mavlink_message_t* msg) {
+    mavlink_set_mode_t set_mode;
+    mavlink_msg_set_mode_decode(msg, &set_mode);
+
+    if (set_mode.target_system == MAVLINK_SYSTEM_ID) {
+        union px4_custom_mode custom_mode;
+        custom_mode.data = set_mode.custom_mode;
+
+        vehicle_command_s cmd_msg{};
+        cmd_msg.timestamp = get_time_us();
+        cmd_msg.command = 176; // MAV_CMD_DO_SET_MODE
+        cmd_msg.param1 = (float)set_mode.base_mode;
+        cmd_msg.param2 = (float)custom_mode.main_mode;
+        cmd_msg.param3 = (float)custom_mode.sub_mode;
+        _cmd_pub.publish(cmd_msg);
+    }
+}
+
+void MavlinkManager::handle_command_long(mavlink_message_t* msg) {
+    mavlink_command_long_t cmd_long;
+    mavlink_msg_command_long_decode(msg, &cmd_long);
+
+    if (cmd_long.target_system == MAVLINK_SYSTEM_ID) {
+        vehicle_command_s cmd_msg{};
+        cmd_msg.timestamp = get_time_us();
+        cmd_msg.command = cmd_long.command;
+        cmd_msg.param1 = cmd_long.param1;
+        cmd_msg.param2 = cmd_long.param2;
+        cmd_msg.param3 = cmd_long.param3;
+        cmd_msg.param4 = cmd_long.param4;
+        cmd_msg.param5 = cmd_long.param5;
+        cmd_msg.param6 = cmd_long.param6;
+        cmd_msg.param7 = cmd_long.param7;
+        _cmd_pub.publish(cmd_msg);
+
+        // Gửi COMMAND_ACK về cho GCS
+        mavlink_message_t ack_msg;
+        uint8_t ack_buf[MAVLINK_MAX_PACKET_LEN];
+        mavlink_msg_command_ack_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &ack_msg,
+                                     cmd_long.command, MAV_RESULT_ACCEPTED, 0, 0,
+                                     msg->sysid, msg->compid);
+        uint16_t ack_len = mavlink_msg_to_send_buffer(ack_buf, &ack_msg);
+        tx_push(ack_buf, ack_len);
+    }
+}
+
+// ================= GIAO THỨC MAVLINK MISSION =================
+
+void MavlinkManager::handle_mission_count(mavlink_message_t* msg) {
+    mavlink_mission_count_t count_packet;
+    mavlink_msg_mission_count_decode(msg, &count_packet);
+
+    if (count_packet.target_system == MAVLINK_SYSTEM_ID && count_packet.target_component == MAVLINK_COMPONENT_ID) {
+        g_navigator.clear_waypoints();
+        _incoming_mission_count = count_packet.count;
+        _incoming_mission_index = 0;
+
+        FC_INFO("[Mavlink] Upload started: expecting %d waypoints", _incoming_mission_count);
+
+        if (_incoming_mission_count > 0) {
+            // Yêu cầu waypoint đầu tiên (seq = 0)
+            mavlink_message_t tx_msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            mavlink_msg_mission_request_int_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                                 msg->sysid, msg->compid, 0, MAV_MISSION_TYPE_MISSION);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+            tx_push(buf, len);
+        } else {
+            // Acknowledge rỗng
+            mavlink_message_t tx_msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            mavlink_msg_mission_ack_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                         msg->sysid, msg->compid, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+            tx_push(buf, len);
+        }
+    }
+}
+
+void MavlinkManager::handle_mission_item_int(mavlink_message_t* msg) {
+    mavlink_mission_item_int_t item;
+    mavlink_msg_mission_item_int_decode(msg, &item);
+
+    if (item.target_system == MAVLINK_SYSTEM_ID && item.target_component == MAVLINK_COMPONENT_ID) {
+        if (item.seq == _incoming_mission_index && _incoming_mission_index < _incoming_mission_count) {
+            position_setpoint_s wp{};
+            wp.valid = true;
+            wp.type = SETPOINT_TYPE_POSITION;
+
+            // Hỗ trợ cả FRAME_LOCAL_NED và GLOBAL_RELATIVE_ALT
+            if (item.frame == MAV_FRAME_LOCAL_NED) {
+                wp.x = (float)item.x; // local X trong mét
+                wp.y = (float)item.y; // local Y trong mét
+                wp.z = (float)item.z; // local Z trong mét (NED âm)
+            } else {
+                // Mặc định quy đổi Flat Earth từ GPS
+                sensor_gps_s gps{};
+                _gps_sub.copy(gps);
+
+                float home_lat = (gps.fix_type >= 3) ? (float)gps.lat : 0.0f;
+                float home_lon = (gps.fix_type >= 3) ? (float)gps.lon : 0.0f;
+                float home_alt = (gps.fix_type >= 3) ? (float)gps.alt * 0.001f : 0.0f;
+
+                float lat_val = (float)item.x;
+                float lon_val = (float)item.y;
+
+                wp.x = (lat_val - home_lat) * 1e-7f * 111132.954f;
+                wp.y = (lon_val - home_lon) * 1e-7f * 111132.954f * cosf(home_lat * 1e-7f * 0.0174532925f);
+                
+                if (item.frame == MAV_FRAME_GLOBAL_RELATIVE_ALT) {
+                    wp.z = -item.z; // Z âm đi lên
+                } else {
+                    wp.z = -(item.z - home_alt);
+                }
+            }
+            
+            wp.yaw = item.param4; // Yaw ở góc radian
+            g_navigator.add_waypoint(wp);
+            _incoming_mission_index++;
+
+            if (_incoming_mission_index < _incoming_mission_count) {
+                // Yêu cầu item tiếp theo
+                mavlink_message_t tx_msg;
+                uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+                mavlink_msg_mission_request_int_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                                     msg->sysid, msg->compid, _incoming_mission_index, MAV_MISSION_TYPE_MISSION);
+                uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+                tx_push(buf, len);
+            } else {
+                // Hoàn thành sứ mệnh nạp
+                g_navigator.save_mission_to_flash();
+                mavlink_message_t tx_msg;
+                uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+                mavlink_msg_mission_ack_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                             msg->sysid, msg->compid, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+                uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+                tx_push(buf, len);
+                FC_INFO("[Mavlink] Mission upload complete: %d waypoints saved", _incoming_mission_count);
+            }
+        }
+    }
+}
+
+void MavlinkManager::handle_mission_item(mavlink_message_t* msg) {
+    mavlink_mission_item_t item;
+    mavlink_msg_mission_item_decode(msg, &item);
+
+    if (item.target_system == MAVLINK_SYSTEM_ID && item.target_component == MAVLINK_COMPONENT_ID) {
+        if (item.seq == _incoming_mission_index && _incoming_mission_index < _incoming_mission_count) {
+            position_setpoint_s wp{};
+            wp.valid = true;
+            wp.type = SETPOINT_TYPE_POSITION;
+
+            if (item.frame == MAV_FRAME_LOCAL_NED) {
+                wp.x = item.x;
+                wp.y = item.y;
+                wp.z = item.z;
+            } else {
+                sensor_gps_s gps{};
+                _gps_sub.copy(gps);
+
+                float home_lat = (gps.fix_type >= 3) ? (float)gps.lat : 0.0f;
+                float home_lon = (gps.fix_type >= 3) ? (float)gps.lon : 0.0f;
+                float home_alt = (gps.fix_type >= 3) ? (float)gps.alt * 0.001f : 0.0f;
+
+                wp.x = (item.x - home_lat * 1e-7f) * 111132.954f;
+                wp.y = (item.y - home_lon * 1e-7f) * 111132.954f * cosf(home_lat * 1e-7f * 0.0174532925f);
+                
+                if (item.frame == MAV_FRAME_GLOBAL_RELATIVE_ALT) {
+                    wp.z = -item.z;
+                } else {
+                    wp.z = -(item.z - home_alt);
+                }
+            }
+            
+            wp.yaw = item.param4;
+            g_navigator.add_waypoint(wp);
+            _incoming_mission_index++;
+
+            if (_incoming_mission_index < _incoming_mission_count) {
+                mavlink_message_t tx_msg;
+                uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+                mavlink_msg_mission_request_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                                 msg->sysid, msg->compid, _incoming_mission_index, MAV_MISSION_TYPE_MISSION);
+                uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+                tx_push(buf, len);
+            } else {
+                g_navigator.save_mission_to_flash();
+                mavlink_message_t tx_msg;
+                uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+                mavlink_msg_mission_ack_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                             msg->sysid, msg->compid, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+                uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+                tx_push(buf, len);
+                FC_INFO("[Mavlink] Mission upload complete (float format): %d waypoints saved", _incoming_mission_count);
+            }
+        }
+    }
+}
+
+void MavlinkManager::handle_mission_request_list(mavlink_message_t* msg) {
+    mavlink_mission_request_list_t request;
+    mavlink_msg_mission_request_list_decode(msg, &request);
+
+    if (request.target_system == MAVLINK_SYSTEM_ID && request.target_component == MAVLINK_COMPONENT_ID) {
+        uint8_t count = g_navigator.get_waypoint_count();
+        mavlink_message_t tx_msg;
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+        mavlink_msg_mission_count_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                       msg->sysid, msg->compid, count, MAV_MISSION_TYPE_MISSION, 0);
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+        tx_push(buf, len);
+    }
+}
+
+void MavlinkManager::handle_mission_request_int(mavlink_message_t* msg) {
+    mavlink_mission_request_int_t request;
+    mavlink_msg_mission_request_int_decode(msg, &request);
+
+    if (request.target_system == MAVLINK_SYSTEM_ID && request.target_component == MAVLINK_COMPONENT_ID) {
+        uint8_t count = g_navigator.get_waypoint_count();
+        if (request.seq < count) {
+            position_setpoint_s wp = g_navigator.get_waypoint(request.seq);
+
+            sensor_gps_s gps{};
+            _gps_sub.copy(gps);
+
+            float home_lat = (gps.fix_type >= 3) ? (float)gps.lat : 0.0f;
+            float home_lon = (gps.fix_type >= 3) ? (float)gps.lon : 0.0f;
+
+            // Flat earth inverse
+            int32_t lat_val = (int32_t)(home_lat + (wp.x / 111132.954f) * 1e7f);
+            int32_t lon_val = (int32_t)(home_lon + (wp.y / (111132.954f * cosf(home_lat * 1e-7f * 0.0174532925f))) * 1e7f);
+            float alt_val = -wp.z; // relative to Home
+
+            mavlink_message_t tx_msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            mavlink_msg_mission_item_int_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                              msg->sysid, msg->compid, request.seq,
+                                              MAV_FRAME_GLOBAL_RELATIVE_ALT, MAV_CMD_NAV_WAYPOINT,
+                                              0, 1, 0.0f, 1.0f, 0.0f, wp.yaw,
+                                              lat_val, lon_val, alt_val, MAV_MISSION_TYPE_MISSION);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+            tx_push(buf, len);
+        }
+    }
+}
+
+void MavlinkManager::handle_mission_request(mavlink_message_t* msg) {
+    mavlink_mission_request_t request;
+    mavlink_msg_mission_request_decode(msg, &request);
+
+    if (request.target_system == MAVLINK_SYSTEM_ID && request.target_component == MAVLINK_COMPONENT_ID) {
+        uint8_t count = g_navigator.get_waypoint_count();
+        if (request.seq < count) {
+            position_setpoint_s wp = g_navigator.get_waypoint(request.seq);
+
+            sensor_gps_s gps{};
+            _gps_sub.copy(gps);
+
+            float home_lat = (gps.fix_type >= 3) ? (float)gps.lat : 0.0f;
+            float home_lon = (gps.fix_type >= 3) ? (float)gps.lon : 0.0f;
+
+            float lat_val = home_lat * 1e-7f + (wp.x / 111132.954f);
+            float lon_val = home_lon * 1e-7f + (wp.y / (111132.954f * cosf(home_lat * 1e-7f * 0.0174532925f)));
+            float alt_val = -wp.z;
+
+            mavlink_message_t tx_msg;
+            uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+            mavlink_msg_mission_item_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                          msg->sysid, msg->compid, request.seq,
+                                          MAV_FRAME_GLOBAL_RELATIVE_ALT, MAV_CMD_NAV_WAYPOINT,
+                                          0, 1, 0.0f, 1.0f, 0.0f, wp.yaw,
+                                          lat_val, lon_val, alt_val, MAV_MISSION_TYPE_MISSION);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+            tx_push(buf, len);
+        }
+    }
+}
+
+void MavlinkManager::handle_mission_clear_all(mavlink_message_t* msg) {
+    mavlink_mission_clear_all_t request;
+    mavlink_msg_mission_clear_all_decode(msg, &request);
+
+    if (request.target_system == MAVLINK_SYSTEM_ID && request.target_component == MAVLINK_COMPONENT_ID) {
+        g_navigator.clear_waypoints();
+        g_navigator.save_mission_to_flash();
+        FC_INFO("[Mavlink] All waypoints cleared and saved to Flash");
+
+        mavlink_message_t tx_msg;
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+        mavlink_msg_mission_ack_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                     msg->sysid, msg->compid, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION, 0);
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+        tx_push(buf, len);
+    }
+}
+
+void MavlinkManager::handle_mission_set_current(mavlink_message_t* msg) {
+    mavlink_mission_set_current_t request;
+    mavlink_msg_mission_set_current_decode(msg, &request);
+
+    if (request.target_system == MAVLINK_SYSTEM_ID && request.target_component == MAVLINK_COMPONENT_ID) {
+        mavlink_message_t tx_msg;
+        uint8_t buf[MAVLINK_MAX_PACKET_LEN];
+        mavlink_msg_mission_current_pack(MAVLINK_SYSTEM_ID, MAVLINK_COMPONENT_ID, &tx_msg,
+                                         request.seq, 0, 0, 0, 0, 0, 0);
+        uint16_t len = mavlink_msg_to_send_buffer(buf, &tx_msg);
+        tx_push(buf, len);
+    }
 }
 

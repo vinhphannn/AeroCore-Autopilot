@@ -54,6 +54,10 @@ enum param_id_t {
     // Airmode: 0=Disabled, 1=Roll/Pitch, 2=Roll/Pitch/Yaw
     PARAM_MC_AIRMODE,
 
+    // Navigation & RTL Parameters
+    PARAM_NAV_ACC_RAD,
+    PARAM_RTL_ALT,
+    
     // LUÔN ĐỂ PARAM_COUNT Ở CUỐI ĐỂ ĐẾM TỔNG SỐ PARAM CÓ TRONG HỆ THỐNG
     PARAM_COUNT
 };

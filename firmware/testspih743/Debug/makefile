@@ -23,6 +23,7 @@ RM := rm -rf
 -include FC_Core/MessageBus/topics/subdir.mk
 -include FC_Core/Main/subdir.mk
 -include FC_Core/Estimator/ahrs/subdir.mk
+-include FC_Core/Estimator/subdir.mk
 -include FC_Core/Drivers/rc/subdir.mk
 -include FC_Core/Drivers/rangefinder/subdir.mk
 -include FC_Core/Drivers/radio/subdir.mk
@@ -34,11 +35,13 @@ RM := rm -rf
 -include FC_Core/Drivers/actuator/subdir.mk
 -include FC_Core/Drivers/subdir.mk
 -include FC_Core/Controllers/mc_rate_control/subdir.mk
+-include FC_Core/Controllers/mc_pos_control/subdir.mk
 -include FC_Core/Controllers/mc_att_control/subdir.mk
 -include FC_Core/Controllers/control_allocator/subdir.mk
 -include FC_Core/Communication/subdir.mk
 -include FC_Core/Commander/flight_mode_manager/subdir.mk
 -include FC_Core/Commander/subdir.mk
+-include FC_Core/Navigation/subdir.mk
 -include Drivers/STM32H7xx_HAL_Driver/Src/subdir.mk
 -include Core/Startup/subdir.mk
 -include Core/Src/subdir.mk
@@ -114,17 +117,17 @@ all: main-build
 main-build: MyFC_H743.elf secondary-outputs
 
 # Tool invocations
-MyFC_H743.elf MyFC_H743.map: $(OBJS) $(USER_OBJS) ../STM32H743VITX_FLASH.ld makefile $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "MyFC_H743.elf" $(OBJS) $(USER_OBJS) $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"../STM32H743VITX_FLASH.ld" -Wl,-Map="MyFC_H743.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+MyFC_H743.elf MyFC_H743.map: $(OBJS) $(USER_OBJS) /home/zynh/Workspace/MyFC/firmware/testspih743/STM32H743VITX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-g++ -o "MyFC_H743.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"/home/zynh/Workspace/MyFC/firmware/testspih743/STM32H743VITX_FLASH.ld" -Wl,-Map="MyFC_H743.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
-default.size.stdout: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
+default.size.stdout: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-size  $(EXECUTABLES)
 	@echo 'Finished building: $@'
 	@echo ' '
 
-MyFC_H743.list: $(EXECUTABLES) makefile $(OPTIONAL_TOOL_DEPS)
+MyFC_H743.list: $(EXECUTABLES) makefile objects.list $(OPTIONAL_TOOL_DEPS)
 	arm-none-eabi-objdump -h -S $(EXECUTABLES) > "MyFC_H743.list"
 	@echo 'Finished building: $@'
 	@echo ' '

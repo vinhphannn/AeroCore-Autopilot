@@ -1,5 +1,6 @@
 #include "FlightModeManager.h"
 #include "stm32h7xx_hal.h"
+#include "../../Controllers/mc_pos_control/PositionController.h"
 
 FlightModeManager g_flight_mode_mgr;
 
@@ -76,11 +77,12 @@ void FlightModeManager::update() {
                 break;
                 
             case NAVIGATION_STATE_ALTCTL:
-                // TODO: Chạy PID Độ cao (lấy Baro) -> Tính ra Thrust và Góc
-                break;
-
             case NAVIGATION_STATE_POSCTL:
-                // TODO: Chạy PID Vị trí (lấy GPS) -> Tính ra Góc
+            case NAVIGATION_STATE_AUTO_LAND:
+            case NAVIGATION_STATE_AUTO_TAKEOFF:
+            case NAVIGATION_STATE_AUTO_MISSION:
+            case NAVIGATION_STATE_AUTO_RTL:
+                g_pos_control.update(0.01f, status.nav_state);
                 break;
 
             default:
@@ -89,3 +91,4 @@ void FlightModeManager::update() {
         }
     }
 }
+

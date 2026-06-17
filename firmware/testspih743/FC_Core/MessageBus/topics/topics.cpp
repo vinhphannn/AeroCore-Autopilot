@@ -14,6 +14,10 @@
 #include "vehicle_thrust_setpoint.h"
 #include "vehicle_attitude_setpoint.h"
 #include "input_rc.h"
+#include "vehicle_local_position.h"
+#include "landing_target.h"
+#include "position_setpoint_triplet.h"
+#include "vehicle_command.h"
 // Khởi tạo vùng nhớ thực sự cho Topic.
 // Chỉ được định nghĩa đúng 1 lần duy nhất trong toàn bộ project.
 uORB::Topic<sensor_imu_s> orb_sensor_imu;
@@ -32,3 +36,8 @@ uORB::Topic<vehicle_torque_setpoint_s> orb_vehicle_torque_setpoint;
 uORB::Topic<vehicle_thrust_setpoint_s> orb_vehicle_thrust_setpoint;
 uORB::Topic<vehicle_attitude_setpoint_s> orb_vehicle_attitude_setpoint;
 uORB::Topic<input_rc_s> orb_input_rc;
+uORB::Topic<vehicle_local_position_s> orb_vehicle_local_position;
+uORB::Topic<landing_target_s> orb_landing_target;
+uORB::Topic<position_setpoint_triplet_s> orb_position_setpoint_triplet;
+uORB::Topic<vehicle_command_s> orb_vehicle_command;
+

@@ -15,6 +15,7 @@
 #include "../MessageBus/topics/actuator_armed.h"
 #include "../MessageBus/topics/vehicle_status.h"
 #include "../MessageBus/topics/input_rc.h"
+#include "../MessageBus/topics/vehicle_command.h"
 #include "../MessageBus/uORB_lite.h"
 
 // Cấu hình ID cho hệ thống (System ID) và Component (Component ID)
@@ -75,6 +76,7 @@ private:
     uORB::SubscriptionMulti<actuator_armed_s> _armed_sub;
     uORB::SubscriptionMulti<vehicle_status_s> _status_sub;
     uORB::SubscriptionMulti<input_rc_s> _rc_sub;
+    uORB::PublicationMulti<vehicle_command_s> _cmd_pub;
     
     uint64_t _last_heartbeat_us;
     uint64_t _last_imu_send_us;
@@ -102,6 +104,22 @@ private:
     void handle_message(mavlink_message_t* msg);
     void handle_param_request_list(mavlink_message_t* msg);
     void handle_param_set(mavlink_message_t* msg);
+    void handle_set_mode(mavlink_message_t* msg);
+    void handle_command_long(mavlink_message_t* msg);
+    
+    // Giao thức Mission Upload/Download
+    void handle_mission_count(mavlink_message_t* msg);
+    void handle_mission_item_int(mavlink_message_t* msg);
+    void handle_mission_item(mavlink_message_t* msg);
+    void handle_mission_request_list(mavlink_message_t* msg);
+    void handle_mission_request_int(mavlink_message_t* msg);
+    void handle_mission_request(mavlink_message_t* msg);
+    void handle_mission_clear_all(mavlink_message_t* msg);
+    void handle_mission_set_current(mavlink_message_t* msg);
+
+    // Trạng thái Protocol Sứ mệnh
+    uint16_t _incoming_mission_count;
+    uint16_t _incoming_mission_index;
 
     // Thời gian tính bằng microsecond theo chuẩn PX4
     uint64_t get_time_us();

@@ -9,12 +9,15 @@
 #include "../Drivers/gps/gps_m10.h"
 #include "../Drivers/rc/crsf.h"
 #include "../Estimator/ahrs/AttitudeEstimator.h"
+#include "../Estimator/PositionEstimator.h"
 #include "../Sensors/SensorHub.h"
 #include "../Commander/Commander.h"
 #include "../Controllers/mc_att_control/AttitudeController.h"
+#include "../Controllers/mc_pos_control/PositionController.h"
 #include "../Controllers/control_allocator/Mixer.h"
 #include "../Commander/flight_mode_manager/FlightModeManager.h"
 #include "sys_monitor.h"
+#include "../Navigation/Navigator.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -59,10 +62,13 @@ extern "C" void FC_SensorsTask(void) {
     
     g_sensor_hub.init();
     g_estimator.init();
+    g_pos_estimator.init();
     g_commander.init();
     g_flight_mode_mgr.init();
+    g_pos_control.init();
     g_att_control.init();
     g_mixer.init();
+    g_navigator.init();
     
     QMC5883L_Data_t mag_data;
     PMW3901_Data_t opt_data;
@@ -95,9 +101,15 @@ extern "C" void FC_SensorsTask(void) {
         
         // Cập nhật bộ lọc Mahony để tính toán góc nghiêng 3D từ vehicle_imu
         g_estimator.update();
+
+        // Cập nhật bộ ước lượng vị trí và vận tốc (PositionEstimator)
+        g_pos_estimator.update();
         
         // Cập nhật Trạng thái an toàn máy bay (Arm/Disarm)
         g_commander.update();
+        
+        // Navigator: Quản lý Waypoint/Mission/RTL
+        g_navigator.update();
         
         // FlightModeManager: Quản lý Mode, sinh ra Setpoint Góc + Lực đẩy
         g_flight_mode_mgr.update();
@@ -107,7 +119,6 @@ extern "C" void FC_SensorsTask(void) {
         
         // Mixer: ControlAllocation (Sequential Desaturation) -> DShot
         g_mixer.update();
-        
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
