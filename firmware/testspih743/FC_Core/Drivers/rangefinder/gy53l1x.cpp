@@ -16,32 +16,17 @@ static uORB::PublicationMulti<distance_sensor_s> tof_pub(orb_distance_sensor);
 /* Macro hỗ trợ debug CDC (có thể bỏ nếu không dùng) */
 #define CDC_Transmit_FS   CDC_Transmit_FS   // Giữ nguyên như project của bạn
 
-/* ---------- Hàm nội bộ ---------- */
-/**
- * @brief  Xóa tất cả cờ lỗi UART để tránh treo.
- * @param  huart: con trỏ UART handle
- */
+// Ring Buffer & State Machine variables
+#define GY53_RX_BUF_SIZE 128
+static uint8_t gy53_rx_buffer[GY53_RX_BUF_SIZE];
+static volatile uint16_t gy53_rx_head = 0;
+static uint16_t gy53_rx_tail = 0;
+static uint8_t gy53_rx_byte;
+static UART_HandleTypeDef *gy53_huart = NULL;
+
 static void GY53_ClearUARTFlags(UART_HandleTypeDef *huart) {
     __HAL_UART_CLEAR_FLAG(huart,
         UART_CLEAR_OREF | UART_CLEAR_NEF | UART_CLEAR_FEF | UART_CLEAR_PEF);
-}
-
-/**
- * @brief  Đọc một byte từ UART (blocking, chờ 1ms nếu không có)
- * @param  huart: UART handle
- * @param  byte: con trỏ lưu byte đọc được
- * @param  timeout_ms: thời gian chờ tối đa
- * @return 1 nếu đọc thành công, 0 nếu timeout
- */
-static uint8_t GY53_ReadByte(UART_HandleTypeDef *huart, uint8_t *byte, uint32_t timeout_ms) {
-    uint32_t tickstart = HAL_GetTick();
-    while ((HAL_GetTick() - tickstart) < timeout_ms) {
-        if (__HAL_UART_GET_FLAG(huart, UART_FLAG_RXNE)) {
-            *byte = (uint8_t)(huart->Instance->RDR & 0xFF);
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /* ---------- API chính ---------- */
@@ -79,81 +64,77 @@ void GY53L1X_Init(UART_HandleTypeDef *huart) {
     /* Đảm bảo cờ sạch trước khi bắt đầu */
     GY53_ClearUARTFlags(huart);
     
-    FC_INFO("GY53L1X Init OK on USART2");
+    gy53_huart = huart;
+    HAL_UART_Receive_IT(huart, &gy53_rx_byte, 1);
+    
+    FC_INFO("GY53L1X Init OK (Interrupt Mode)");
 }
 
 /**
- * @brief  Đọc 1 frame từ GY-53 và trích xuất khoảng cách.
- * @param  huart: UART handle
+ * @brief  Callback ngắt nhận UART (cần được gọi từ HAL_UART_RxCpltCallback trong main.c/it.c)
+ */
+void GY53L1X_RxCallback(UART_HandleTypeDef *huart) {
+    if (huart == gy53_huart) {
+        gy53_rx_buffer[gy53_rx_head] = gy53_rx_byte;
+        gy53_rx_head = (gy53_rx_head + 1) % GY53_RX_BUF_SIZE;
+        HAL_UART_Receive_IT(huart, &gy53_rx_byte, 1);
+    }
+}
+
+/**
+ * @brief  Đọc data từ Ring Buffer (Non-blocking) và phân tích frame GY-53.
+ * @param  huart: UART handle (không còn block)
  * @param  data: con trỏ lưu kết quả
  */
 void GY53L1X_Update(UART_HandleTypeDef *huart, GY53L1X_Data_t *data) {
-    if (!data) return;
+    if (!data || huart != gy53_huart) return;
 
-    /* Reset struct */
-    memset(data, 0, sizeof(GY53L1X_Data_t));
-    data->raw_len = 0;
+    static uint8_t frame_buf[GY53_FRAME_LEN];
+    static uint8_t frame_idx = 0;
 
-    /* Xóa cờ lỗi trước khi đọc (tránh khóa UART trên H7) */
-    GY53_ClearUARTFlags(huart);
+    // Lấy tất cả byte đang có trong Ring Buffer
+    while (gy53_rx_tail != gy53_rx_head) {
+        uint8_t byte = gy53_rx_buffer[gy53_rx_tail];
+        gy53_rx_tail = (gy53_rx_tail + 1) % GY53_RX_BUF_SIZE;
 
-    uint32_t t_start = HAL_GetTick();
-    uint8_t  byte;
-    uint8_t  idx = 0;
-
-    /* Vòng lặp đọc tối đa GY53_FRAME_LEN byte hoặc hết timeout */
-    while ((HAL_GetTick() - t_start) < GY53_TIMEOUT_MS && idx < GY53_FRAME_LEN) {
-        if (GY53_ReadByte(huart, &byte, 1)) {   // Chờ tối đa 1ms cho mỗi byte
-            /* Đồng bộ header 0x5A 0x5A */
-            if (idx == 0) {
-                if (byte == 0x5A) {
-                    data->raw_bytes[idx++] = byte;
-                }
-                // Nếu không đúng 0x5A, bỏ qua và đợi byte tiếp (không reset idx)
-            }
-            else if (idx == 1) {
-                if (byte == 0x5A) {
-                    data->raw_bytes[idx++] = byte;
-                } else {
-                    idx = 0;  // Sai header -> quay lại tìm 0x5A đầu tiên
-                }
-            }
-            else {
-                data->raw_bytes[idx++] = byte;
-            }
+        // State Machine phân tích Frame [0x5A, 0x5A, type, len, dataHigh, dataLow, mode, chksum]
+        if (frame_idx == 0) {
+            if (byte == 0x5A) frame_buf[frame_idx++] = byte;
+        } else if (frame_idx == 1) {
+            if (byte == 0x5A) frame_buf[frame_idx++] = byte;
+            else frame_idx = 0;
+        } else {
+            frame_buf[frame_idx++] = byte;
         }
-    }
 
-    data->raw_len = idx;
+        // Đã nhận đủ 1 frame hợp lệ
+        if (frame_idx == GY53_FRAME_LEN) {
+            // Có thể kiểm tra Checksum ở đây (Checksum = tổng các byte trừ header)
+            
+            // Lấy khoảng cách: Byte4 (High) + Byte5 (Low) = Khoảng cách mm
+            data->distance_mm = (uint16_t)((frame_buf[4] << 8) | frame_buf[5]);
+            data->valid = 1;
+            
+            // Tạo chuỗi hex để debug
+            char *p = data->raw_str;
+            for (uint8_t i = 0; i < GY53_FRAME_LEN; i++) {
+                p += sprintf(p, "%02X ", frame_buf[i]);
+            }
 
-    /* Tạo chuỗi hex để debug */
-    char *p = data->raw_str;
-    for (uint8_t i = 0; i < idx; i++) {
-        p += sprintf(p, "%02X ", data->raw_bytes[i]);
-    }
-    // Nếu không có byte nào, gán thông báo
-    if (idx == 0) {
-        strcpy(data->raw_str, "NO SIGNAL");
-    }
+            // Publish lên uORB ngay lập tức
+            distance_sensor_s msg;
+            msg.timestamp_us = HAL_GetTick() * 1000ULL;
+            msg.current_distance_m = data->distance_mm / 1000.0f;
+            msg.min_distance_m = 0.05f; // Theo datasheet VL53L1X
+            msg.max_distance_m = 4.0f;
+            msg.variance = 0.0f;
+            msg.type = 0; // Laser
+            msg.device_id = 0;
+            tof_pub.publish(msg);
 
-    /* Parse frame nếu đủ 8 byte và header đúng */
-    if (idx == GY53_FRAME_LEN &&
-        data->raw_bytes[0] == 0x5A &&
-        data->raw_bytes[1] == 0x5A) {
-        // Theo datasheet GY-53: Byte4 (High) + Byte5 (Low) = Khoảng cách mm
-        data->distance_mm = (uint16_t)((data->raw_bytes[4] << 8) | data->raw_bytes[5]);
-        data->valid = 1;
-
-        // Publish lên uORB
-        distance_sensor_s msg;
-        msg.timestamp_us = HAL_GetTick() * 1000ULL;
-        msg.current_distance_m = data->distance_mm / 1000.0f;
-        msg.min_distance_m = 0.05f; // Theo datasheet VL53L1X
-        msg.max_distance_m = 4.0f;
-        msg.variance = 0.0f;
-        msg.type = 0; // Laser
-        msg.device_id = 0;
-        tof_pub.publish(msg);
+            // Reset frame index để đọc frame tiếp theo
+            frame_idx = 0;
+        }
     }
 }
 
